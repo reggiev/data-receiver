@@ -1,0 +1,7 @@
+requests
+pymongo
+flask
+flask_httpauth
+bs4
+rsa
+pika
