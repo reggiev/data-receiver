@@ -1,7 +1,9 @@
 import os
-from datetime import datetime
+import json
+
 from flask import Flask, request
 from flask_httpauth import HTTPBasicAuth
+from logging.config import dictConfig
 from werkzeug.security import check_password_hash
 
 from src.stateful_connectors.slack_connector import send_msg_to_slack_channel
@@ -12,18 +14,46 @@ from src.data_receiver_tools.chartist import parser_correlating_alert
 app = Flask(__name__)
 auth = HTTPBasicAuth()
 
+dictConfig({
+    'version': 1,
+    'formatters': {'default': {
+        'format': '[%(asctime)s] [%(levelname)s] [%(module)s]: %(message)s',
+    }},
+    'handlers': {'wsgi': {
+        'class': 'logging.StreamHandler',
+        'stream': 'ext://sys.stdout',
+        'formatter': 'default'
+    }},
+    'root': {
+        'level': 'INFO',
+        'handlers': ['wsgi']
+    }
+})
+
+
+@auth.get_user_roles
+def get_user_roles(user):
+  # TODO log indirect user reference here, do not log user name
+  app.logger.info("Returning access rights {} for {}.".format(user["user"], user["rights"]))
+  return user["rights"]
+
 
 @auth.verify_password
 def verify_password(username, password):
   # TODO perform more sophisticated credentials verification
-  # TODO determine client access rights
-  toks = os.environ.get("flask_token", "")
-  print(toks)
-  if check_password_hash(toks, username+password):
-    return username
+  # TODO store this is a more secure manner
+  users = json.loads(os.environ.get('UML', ""))
+  
+  if username in users:
+    if check_password_hash(users[username]["hash"], username+password):
+      return {"user": username, "rights": users[username]["rights"]}
+    else:
+      # TODO send failed login at correct user event to RabbitMQ
+      app.logger.info("User failed to fully match for: {}".format(username))
   else:
-    # TODO send failed login event to rabbitMQ
-    pass
+    # TODO send failed login event to RabbitMQ
+    app.logger.info("User failed login attempt for: {}".format(username))
+  return False
 
  
 @app.route('/')
@@ -33,14 +63,13 @@ def index():
   
 
 @app.route('/api-request/chartist-email', methods=['POST'])
-@auth.login_required
+@auth.login_required(role=["user", ["chartist"]])
 def chartist_email_interface():
   # parse the important data from the payload
   emsg = request.get_json(force=True)
   if "Correlating Alert" in emsg["headers"]["subject"]:
     parsed_data = parser_correlating_alert(emsg)
     en = encrypt(parsed_data)
-    print(en)
     rmqwriter("e_prospects", "prospects", en)
   else:
     send_msg_to_slack_channel("slack_debug_msgs", {"text": "The subject is not yet supported: " + emsg["headers"]["subject"]})
@@ -48,7 +77,7 @@ def chartist_email_interface():
 
 
 @app.route('/api-request/pinger', methods=['POST'])
-@auth.login_required
+@auth.login_required(role=["user", ["pinger"]])
 def ping_receiver():
   emsg = request.get_json(force=True)
   if not emsg["headers"]["subject"] == "Pinger msg":
