@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import json
 
@@ -46,12 +47,13 @@ def verify_password(username, password):
   
   if username in users:
     if check_password_hash(users[username]["hash"], username+password):
+      rmqwriter("e_sem", "sem", encrypt("[SUCCESS_AUTH] {}, IP: {}, DT: {}".format(username, request.remote_addr, datetime.now())))
       return {"user": username, "rights": users[username]["rights"]}
     else:
-      # TODO send failed login at correct user event to RabbitMQ
+      rmqwriter("e_sem", "sem", encrypt("[INCORRECT_PASSWORD] {}, IP: {}, DT: {}".format(username, request.remote_addr, datetime.now())))
       app.logger.info("User failed to fully match for: {}".format(username))
   else:
-    # TODO send failed login event to RabbitMQ
+    rmqwriter("e_sem", "sem", encrypt("[UNKNOWN_USER] {}, IP: {}, DT: {}".format(username, request.remote_addr, datetime.now())))
     app.logger.info("User failed login attempt for: {}".format(username))
   return False
 
